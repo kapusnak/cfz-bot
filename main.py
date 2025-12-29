@@ -149,70 +149,115 @@ def find_time_block_in_column(column_element, target_time):
 def check_spot_availability(soup, date, time):
     """
     Check if a spot is available for the given date and time.
-    Uses precise targeting: Find table column -> Find span.cas-od -> Get parent -> Parse capacity.
+    Iterates through ALL rows in tbody to find the lesson, skipping navigation rows.
     Returns (is_available, capacity_text) where is_available is True if spot is free.
     """
-    # Step 1: Find the Column - Keep the existing logic (Find th index -> Look in tbody rows at that index)
-    day_column = find_date_column(soup, date)
-    if not day_column:
-        print(f"DEBUG: Could not find day column for date: {date}", flush=True)
+    # Step 1: Find Column Index - Find the header (th) that contains the target date
+    table = soup.find('table')
+    if not table:
+        print(f"DEBUG: No table found", flush=True)
         return False, None
     
-    print("DEBUG: Found day column.", flush=True)
+    thead = table.find('thead')
+    header_row = None
     
-    # Step 2: Find the Lesson (The Anchor)
-    # Inside the correct table cell (td), search for a specific tag: span with class 'cas-od'
-    # Iterate through all found span.cas-od elements in that cell
-    cas_od_spans = day_column.find_all('span', class_='cas-od')
+    if thead:
+        header_row = thead.find('tr')
+    else:
+        # If no thead, look for first tr with th elements
+        for tr in table.find_all('tr'):
+            if tr.find('th'):
+                header_row = tr
+                break
     
-    if not cas_od_spans:
-        print(f"DEBUG: No 'span.cas-od' elements found in day column.", flush=True)
-        print(f"DEBUG: Day Column HTML:\n{day_column.prettify()}", flush=True)
+    if not header_row:
+        print(f"DEBUG: No header row found in table", flush=True)
         return False, None
     
-    # Check if the text is exactly the target time (e.g., "15:00")
-    target_span = None
-    for span in cas_od_spans:
-        span_text = span.get_text(strip=True)
-        if span_text == time:  # Exact match
-            target_span = span
-            print(f"DEBUG: Found 'span.cas-od' for time {time}", flush=True)
+    # Get all header cells (th) in the header row
+    header_cells = header_row.find_all('th')
+    
+    # Find the header that contains the target date and get its index
+    col_index = None
+    for index, th in enumerate(header_cells):
+        th_text = th.get_text(strip=True)
+        if date in th_text:
+            col_index = index
+            print(f"DEBUG: Found date in header index {index}.", flush=True)
             break
     
-    if not target_span:
-        found_times = [span.get_text(strip=True) for span in cas_od_spans]
-        print(f"DEBUG: No 'span.cas-od' found with exact time '{time}'. Found times: {found_times}", flush=True)
+    if col_index is None:
+        print(f"DEBUG: Could not find date '{date}' in any header cell", flush=True)
         return False, None
     
-    # Step 3: Find the Container
-    # Once the specific span.cas-od is found, get its parent element. This parent is the "Lesson Box"
-    lesson_box = target_span.find_parent()
-    if not lesson_box:
-        print("DEBUG: Could not find parent element of span.cas-od", flush=True)
+    # Step 2: Iterate Rows (The Fix) - Loop through EVERY row in the tbody
+    tbody = table.find('tbody')
+    if not tbody:
+        print(f"DEBUG: No tbody found in table", flush=True)
         return False, None
     
-    # Step 4: Parse Capacity
-    # From this "Lesson Box" (parent), get all text (.get_text(strip=True))
-    # It will contain the time, the class name, and the numbers (e.g., "15:00 ... 17 / 18")
-    lesson_box_text = lesson_box.get_text(strip=True)
-    print(f"DEBUG: Lesson Box Text: \"{lesson_box_text}\"", flush=True)
+    body_rows = tbody.find_all('tr')
+    print(f"DEBUG: Found {len(body_rows)} rows in tbody. Iterating through all rows...", flush=True)
     
-    # Use the Regex (\d+)\s*/\s*(\d+) on this text to find the numbers
-    match = re.search(r'(\d+)\s*/\s*(\d+)', lesson_box_text)
-    if not match:
-        print("DEBUG: No pattern match found in lesson box text", flush=True)
-        return False, lesson_box_text
+    # Loop through EVERY row (tr) in the tbody
+    for row_index, row in enumerate(body_rows):
+        # Get the cell (td) at the col_index
+        row_cells = row.find_all('td')
+        if col_index >= len(row_cells):
+            print(f"DEBUG: Row {row_index} does not have enough cells. Continuing...", flush=True)
+            continue
+        
+        cell = row_cells[col_index]
+        
+        # Target the Anchor: Search INSIDE this cell for a span with class 'cas-od'
+        cas_od_spans = cell.find_all('span', class_='cas-od')
+        
+        if not cas_od_spans:
+            print(f"DEBUG: Row {row_index} does not contain time {time}. Continuing...", flush=True)
+            continue
+        
+        # Check Time: Check if that span's text matches the target time (e.g. "15:00")
+        target_span = None
+        for span in cas_od_spans:
+            span_text = span.get_text(strip=True)
+            if span_text == time:  # Exact match
+                target_span = span
+                print(f"DEBUG: Found 'span.cas-od' for time {time} in row {row_index}", flush=True)
+                break
+        
+        # If found:
+        if target_span:
+            # Get the parent element of the span (the lesson container)
+            lesson_box = target_span.find_parent()
+            if not lesson_box:
+                print("DEBUG: Could not find parent element of span.cas-od", flush=True)
+                continue
+            
+            # Extract all text from this parent
+            lesson_box_text = lesson_box.get_text(strip=True)
+            print(f"DEBUG: Lesson Box Text: \"{lesson_box_text}\"", flush=True)
+            
+            # Parse numbers using Regex (\d+)\s*/\s*(\d+)
+            match = re.search(r'(\d+)\s*/\s*(\d+)', lesson_box_text)
+            if not match:
+                print("DEBUG: No pattern match found in lesson box text", flush=True)
+                return False, lesson_box_text
+            
+            # Extract the captured groups and convert to int
+            occupied = int(match.group(1))
+            total = int(match.group(2))
+            print(f"DEBUG: Parsed: Occupied {occupied}, Total {total}", flush=True)
+            
+            # Check capacity (occupied < total) and return True/False
+            is_available = occupied < total
+            print(f"DEBUG: Logic check -> {occupied} < {total} is {is_available}", flush=True)
+            
+            # BREAK the loop (stop searching once found)
+            return is_available, lesson_box_text
     
-    # Extract the captured groups and convert to int
-    occupied = int(match.group(1))
-    total = int(match.group(2))
-    print(f"DEBUG: Parsed: Occupied {occupied}, Total {total}", flush=True)
-    
-    # Logic: Only send webhook if we successfully parsed numbers AND occupied < total
-    is_available = occupied < total
-    print(f"DEBUG: Logic check -> {occupied} < {total} is {is_available}", flush=True)
-    
-    return is_available, lesson_box_text
+    # If the loop finishes without finding anything, print failure
+    print(f"DEBUG: FAILED to find lesson with time '{time}' in any row after checking {len(body_rows)} rows.", flush=True)
+    return False, None
 
 
 def send_notification(date, time, chat_id):
