@@ -190,17 +190,13 @@ def check_spot_availability(soup, date, time):
         print(f"DEBUG: Could not find date '{date}' in any header cell", flush=True)
         return False, None
     
-    # Step 2: Iterate Rows (The Fix) - Loop through EVERY row in the tbody
-    tbody = table.find('tbody')
-    if not tbody:
-        print(f"DEBUG: No tbody found in table", flush=True)
-        return False, None
+    # Step 2: Iterate ALL Rows (The Fix) - Do NOT use find('tbody')
+    # Instead, use find_all('tr') to get EVERY row in the entire table structure
+    rows = table.find_all('tr')
+    print(f"DEBUG: Found {len(rows)} total rows in table.", flush=True)
     
-    body_rows = tbody.find_all('tr')
-    print(f"DEBUG: Found {len(body_rows)} rows in tbody. Iterating through all rows...", flush=True)
-    
-    # Loop through EVERY row (tr) in the tbody
-    for row_index, row in enumerate(body_rows):
+    # Iterate through these rows
+    for row_index, row in enumerate(rows):
         # Get the cell (td) at the col_index
         row_cells = row.find_all('td')
         if col_index >= len(row_cells):
@@ -256,7 +252,7 @@ def check_spot_availability(soup, date, time):
             return is_available, lesson_box_text
     
     # If the loop finishes without finding anything, print failure
-    print(f"DEBUG: FAILED to find lesson with time '{time}' in any row after checking {len(body_rows)} rows.", flush=True)
+    print(f"DEBUG: FAILED to find lesson with time '{time}' in any row after checking {len(rows)} rows.", flush=True)
     return False, None
 
 
