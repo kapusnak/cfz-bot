@@ -119,35 +119,36 @@ def check_spot_availability(soup, date, time):
     Check if a spot is available for the given date and time.
     Returns (is_available, capacity_text) where is_available is True if spot is free.
     """
-    # Find the date column
+    # Step 1: Find the date column
     date_column = find_date_column(soup, date)
     if not date_column:
         return False, None
     
-    # Find the time block within that column
+    # Step 2: Find the time block within that column
     time_block = find_time_block_in_column(date_column, time)
     if not time_block:
         return False, None
     
-    # Look for capacity information in the time block and its children
-    # Capacity might be in the same element or in a child element
-    block_text = time_block.get_text()
+    # Step 3: Find the specific capacity element: div.lekce-telo-obsazeno
+    capacity_element = time_block.find('div', class_='lekce-telo-obsazeno')
+    if not capacity_element:
+        return False, None
     
-    # Also check child elements
-    for child in time_block.find_all(['div', 'span', 'p', 'td']):
-        child_text = child.get_text(strip=True)
-        occupied, total = parse_capacity(child_text)
-        if occupied is not None and total is not None:
-            is_available = occupied < total
-            return is_available, child_text
+    # Step 4: Get the text from this element (should look like "17 / 18" or "17/18")
+    capacity_text = capacity_element.get_text(strip=True)
     
-    # Check the block text itself
-    occupied, total = parse_capacity(block_text)
-    if occupied is not None and total is not None:
-        is_available = occupied < total
-        return is_available, block_text
+    # Step 6: Print the raw text found for debugging
+    print(f"Raw capacity text from lekce-telo-obsazeno: '{capacity_text}'")
     
-    return False, None
+    # Step 5: Parse the numbers (Occupied / Total)
+    occupied, total = parse_capacity(capacity_text)
+    if occupied is None or total is None:
+        print(f"Failed to parse capacity from text: '{capacity_text}'")
+        return False, capacity_text
+    
+    # Step 7: Compare: If occupied < total, spot is free
+    is_available = occupied < total
+    return is_available, capacity_text
 
 
 def send_notification(date, time, chat_id):
