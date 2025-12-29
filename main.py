@@ -149,52 +149,99 @@ def find_time_block_in_column(column_element, target_time):
 def check_spot_availability(soup, date, time):
     """
     Check if a spot is available for the given date and time.
+    Uses div-based column layout approach (Parent Container -> Child Search).
     Returns (is_available, capacity_text) where is_available is True if spot is free.
     """
-    # Step 1: Find the date column (day column)
-    day_column = find_date_column(soup, date)
-    if not day_column:
-        print(f"DEBUG: Could not find day column for date: {date}", flush=True)
-        return False, None
-    
-    print("DEBUG: Found day column.", flush=True)
-    
-    # Step 2: Strict "Starts With" Matching for time block
-    # Iterate through elements in the day_column
-    all_elements = day_column.find_all(['div', 'span', 'p', 'td', 'li'])
-    time_block = None
-    
-    for elem in all_elements:
-        # Extract text and strip() whitespace
-        text = elem.get_text(strip=True)
-        # Check if the text starts with the target time (e.g., "15:00")
-        # This ensures "15:00 - 16:00" is matched, but "14:00 - 15:00" is NOT
-        if text.startswith(time):
-            time_block = elem
+    # Step 1: Find the Day Container
+    # Search for an element (likely a div) that contains the text of the date
+    date_element = None
+    for div in soup.find_all('div'):
+        div_text = div.get_text(strip=True)
+        # Check if the div text contains the date (e.g., "29.12.2025" or "29.12")
+        if date in div_text:
+            date_element = div
             break
     
-    # Debug HTML Dump (Safety Net): If time block not found, dump day column HTML
-    if not time_block:
-        print(f"DEBUG: FAILED to find block starting with '{time}'. Dumping Day Column HTML:", flush=True)
-        print(day_column.prettify(), flush=True)
+    if not date_element:
+        print(f"DEBUG: Could not find element containing date: {date}", flush=True)
         return False, None
     
-    print("DEBUG: Found time block.", flush=True)
+    # CRITICAL: Use recursive search or "find parent" approach to identify the MAIN container
+    # Look for a div with a class like 'kalendar-den' or the closest parent div that wraps the date text
+    day_container = None
     
-    # CRITICAL: Print the HTML content of the found time block
-    print("DEBUG: Block HTML: \n" + time_block.prettify(), flush=True)
+    # First, try to find a parent with class 'kalendar-den'
+    current = date_element
+    for _ in range(10):  # Limit recursion depth
+        parent = current.find_parent('div')
+        if not parent:
+            break
+        # Check if parent has class 'kalendar-den'
+        if parent.get('class') and 'kalendar-den' in parent.get('class', []):
+            day_container = parent
+            break
+        current = parent
     
-    # Step-by-Step Parsing: Try to find div.lekce-telo-obsazeno
+    # If not found by class, use the closest parent div that likely wraps the column
+    if not day_container:
+        # Find the parent div that contains both the date and likely the lessons
+        # Look for a div that has the date element and potentially other lesson divs
+        current = date_element
+        for _ in range(10):  # Limit recursion depth
+            parent = current.find_parent('div')
+            if not parent:
+                day_container = current  # Use current as fallback
+                break
+            # Check if this parent seems to be a container (has multiple children or specific structure)
+            children = parent.find_all('div', recursive=False)
+            if len(children) > 1:  # Has multiple direct children, likely a container
+                day_container = parent
+                break
+            current = parent
+    
+    if not day_container:
+        day_container = date_element.find_parent('div')
+        if not day_container:
+            day_container = date_element
+    
+    container_text = day_container.get_text(strip=True)[:100]  # First 100 chars for debug
+    print(f"DEBUG: Found Day Container with text: {container_text}...", flush=True)
+    
+    # Step 2: Find the Time Block (Inside the Day Container)
+    # Search ONLY inside the day_container
+    # Look for any child div whose text starts with the target time
+    time_block = None
+    all_divs = day_container.find_all('div', recursive=True)
+    
+    for div in all_divs:
+        # Use .get_text(strip=True) to clean the text before checking
+        div_text = div.get_text(strip=True)
+        # Check if text starts with the target time (e.g., "15:00")
+        if div_text.startswith(time):
+            time_block = div
+            break
+    
+    if not time_block:
+        print(f"DEBUG: FAILED to find block starting with '{time}' inside day container.", flush=True)
+        print(f"DEBUG: Day Container HTML:\n{day_container.prettify()}", flush=True)
+        return False, None
+    
+    time_block_text = time_block.get_text(strip=True)[:100]  # First 100 chars for debug
+    print(f"DEBUG: Found Time Block: {time_block_text}...", flush=True)
+    
+    # Step 3: Check Capacity
+    # Once the time block div is found, look inside it for div.lekce-telo-obsazeno
     capacity_element = time_block.find('div', class_='lekce-telo-obsazeno')
     if not capacity_element:
         print("DEBUG: CAPACITY CLASS NOT FOUND inside time block!", flush=True)
+        print(f"DEBUG: Time Block HTML:\n{time_block.prettify()}", flush=True)
         return False, None
     
     # Extract & Clean - Get the text with strip=True
     text = capacity_element.get_text(strip=True)
     print(f"DEBUG: Raw capacity text: \"{text}\"", flush=True)
     
-    # Regex Parsing - Use robust regex to find numbers (keeps existing logic)
+    # Step 4: Parse the "17 / 18" using the existing Regex logic
     match = re.search(r'(\d+)\s*/\s*(\d+)', text)
     if not match:
         print("DEBUG: No pattern match found in text", flush=True)
