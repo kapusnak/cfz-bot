@@ -135,33 +135,31 @@ def check_spot_availability(soup, date, time):
     if not time_block:
         return False, None
     
-    # Step 3: Find the specific capacity element: div.lekce-telo-obsazeno
+    # Step 1: Locate Element - Find div.lekce-telo-obsazeno inside the time block
     capacity_element = time_block.find('div', class_='lekce-telo-obsazeno')
     if not capacity_element:
         return False, None
     
-    # Step 4: Get the text from this element (should look like "17 / 18" or "17/18")
-    capacity_text = capacity_element.get_text(strip=True)
+    # Step 2: Extract & Clean - Get the text with strip=True
+    text = capacity_element.get_text(strip=True)
+    print(f"DEBUG: Found capacity element text: '[{text}]'")
     
-    # DEBUG: Print the raw text found for debugging
-    print(f"DEBUG RAW TEXT: [{capacity_text}]")
+    # Step 3: Regex Parsing (Critical) - Use regex to find numbers
+    match = re.search(r'(\d+)\s*/\s*(\d+)', text)
+    if not match:
+        print("DEBUG: No pattern match found in text")
+        return False, text
     
-    # Step 5: Parse the numbers (Occupied / Total)
-    occupied, total = parse_capacity(capacity_text)
-    if occupied is None or total is None:
-        print(f"Failed to parse capacity from text: '{capacity_text}'")
-        return False, capacity_text
+    # Extract the captured groups and convert to int
+    occupied = int(match.group(1))
+    total = int(match.group(2))
+    print(f"DEBUG: Parsed numbers -> Occupied: {occupied}, Total: {total}")
     
-    # DEBUG: Print the type and value of variables after parsing
-    print(f"DEBUG Occupied: {occupied} (Type: {type(occupied)})")
-    print(f"DEBUG Total: {total} (Type: {type(total)})")
+    # Step 5: Comparison - Check if occupied < total
+    is_available = occupied < total
+    print(f"DEBUG: Logic check -> {occupied} < {total} is {is_available}")
     
-    # Step 7: Compare: If occupied < total, spot is free
-    comparison_result = occupied < total
-    print(f"DEBUG Check: Is {occupied} < {total}? Result: {comparison_result}")
-    
-    is_available = comparison_result
-    return is_available, capacity_text
+    return is_available, text
 
 
 def send_notification(date, time, chat_id):
