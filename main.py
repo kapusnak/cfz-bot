@@ -2,6 +2,7 @@ import os
 import re
 import pandas as pd
 import requests
+import traceback
 from bs4 import BeautifulSoup
 
 # Environment variables
@@ -31,91 +32,143 @@ def fetch_calendar_html():
 
 def check_spot_availability(soup, date, time):
     """
-    Check availability by finding the specific lesson link in the correct date column.
-    Robust version: Does not rely on <thead> or <tbody> tags being present.
+    Check availability in the CrossFit calendar.
+    ROBUST VERSION: Works with the actual HTML structure.
+    
+    The calendar uses <td> elements with class "tb-sloupec" for columns.
+    Each column contains lessons wrapped in <div class="lekce-wrapper-YYYY-MM-DD">.
+    Inside lessons, there are <a> tags (not with class "lekce-link" but with class "jedna-lekce-vypis").
     """
     
-    # 1. FIND THE MAIN TABLE
-    table = soup.find('table')
-    if not table:
-        print("DEBUG: No table found on the page.", flush=True)
+    # 1. FIND THE HEADER ROW TO IDENTIFY COLUMNS
+    print("DEBUG: Looking for the table header...", flush=True)
+    
+    # The header is in a table with class "wk-table-top"
+    header_table = soup.find('table', class_='wk-table-top')
+    if not header_table:
+        print("DEBUG: Header table not found.", flush=True)
         return False, None
-
-    # 2. FIND THE COLUMN INDEX FOR THE DATE
-    # FIX: Don't look for 'thead'. Just find the first row ('tr') in the table.
-    rows = table.find_all('tr')
-    if not rows:
-        print("DEBUG: Table found, but it has no rows.", flush=True)
+    
+    # Find the header row
+    header_row = header_table.find('tr', class_='wk-days')
+    if not header_row:
+        print("DEBUG: Header row not found.", flush=True)
         return False, None
-
-    header_row = rows[0] # Assume first row is header
-    headers = header_row.find_all(['th', 'td']) # Sometimes headers use td instead of th
+    
+    # Get all <th> elements (column headers)
+    header_cells = header_row.find_all('th')
+    
+    # Format date from "29.12.2025" to "29.12" to match headers like "29.12.2025"
+    simple_date = ".".join(date.split('.')[:2])
     
     col_index = None
-    simple_date = ".".join(date.split('.')[:2]) # "29.12.2025" -> "29.12"
-    
-    for i, th in enumerate(headers):
-        th_text = th.get_text(strip=True)
-        if simple_date in th_text:
+    for i, cell in enumerate(header_cells):
+        cell_text = cell.get_text(strip=True)
+        if simple_date in cell_text:
             col_index = i
-            print(f"DEBUG: Found column for date '{simple_date}' at Index {i}. Header: '{th_text}'", flush=True)
+            print(f"DEBUG: Found column for date '{simple_date}' at Index {i}. Header text: '{cell_text}'", flush=True)
             break
-            
+    
     if col_index is None:
-        print(f"DEBUG: Date '{date}' (searched as '{simple_date}') not found in header.", flush=True)
-        # Debug: Print headers to help diagnose
-        debug_headers = [h.get_text(strip=True) for h in headers]
-        print(f"DEBUG: Visible headers: {debug_headers}", flush=True)
+        print(f"DEBUG: Date '{simple_date}' not found in headers.", flush=True)
+        headers_debug = [c.get_text(strip=True) for c in header_cells]
+        print(f"DEBUG: Header content: {headers_debug}", flush=True)
         return False, None
-
-    # 3. SCAN ALL REMAINING ROWS FOR THE LESSON
-    print(f"DEBUG: Scanning {len(rows)-1} rows for lessons...", flush=True)
-
-    # Start from index 1 (skip the header row)
-    for row_idx, row in enumerate(rows[1:], start=1):
-        cells = row.find_all('td')
+    
+    # 2. FIND THE DATA TABLE
+    print("DEBUG: Looking for the data table...", flush=True)
+    data_table = soup.find('table', class_='table-data')
+    if not data_table:
+        print("DEBUG: Data table not found.", flush=True)
+        return False, None
+    
+    # 3. FIND THE CORRECT COLUMN IN THE DATA TABLE
+    # The structure is: <tr class="tb-sloupce-dnu"> contains <td class="tb-sloupec"> for each day
+    data_row = data_table.find('tr', class_='tb-sloupce-dnu')
+    if not data_row:
+        print("DEBUG: Data row (tb-sloupce-dnu) not found.", flush=True)
+        return False, None
+    
+    # Get all <td> elements with class "tb-sloupec" (skip the first one which is for time labels)
+    data_columns = data_row.find_all('td', class_='tb-sloupec')
+    
+    if col_index > len(data_columns):
+        print(f"DEBUG: Column index {col_index} out of range. Found {len(data_columns)} data columns.", flush=True)
+        return False, None
+    
+    # Adjust index because first <td> in header is the time column (width: 60px)
+    # So we need to subtract 1 from col_index
+    actual_col_index = col_index - 1
+    
+    if actual_col_index < 0 or actual_col_index >= len(data_columns):
+        print(f"DEBUG: Adjusted column index {actual_col_index} is out of range.", flush=True)
+        return False, None
+    
+    target_column = data_columns[actual_col_index]
+    print(f"DEBUG: Analyzing column at index {actual_col_index}", flush=True)
+    
+    # 4. FIND ALL LESSONS IN THIS COLUMN
+    # Lessons are inside <div class="lekce-wrapper-YYYY-MM-DD">
+    # Each lesson is a <div class="jedna-lekce-vypis">
+    lessons = target_column.find_all('div', class_='jedna-lekce-vypis')
+    
+    print(f"DEBUG: Found {len(lessons)} lessons in this column", flush=True)
+    
+    for idx, lesson in enumerate(lessons):
+        # Find the time span
+        time_span = lesson.find('span', class_='cas-od')
         
-        # Safety: Ensure row has enough cells
-        if len(cells) <= col_index:
+        if not time_span:
             continue
-            
-        target_cell = cells[col_index]
         
-        # 4. FIND THE LESSON LINK (The Anchor)
-        # Look for <a class="lekce-link"> inside this cell
-        lessons = target_cell.find_all('a', class_='lekce-link')
+        found_time = time_span.get_text(strip=True)
         
-        for lesson in lessons:
-            # Check the TIME inside this lesson
-            time_span = lesson.find('span', class_='cas-od')
-            if not time_span:
-                continue
-                
-            found_time = time_span.get_text(strip=True)
+        # Compare with target time
+        if found_time == time:
+            print(f"DEBUG: MATCH! Found lesson at {time} (lesson index {idx})", flush=True)
             
-            # Compare found time with target time (e.g., "15:00")
-            if found_time == time:
-                print(f"DEBUG: MATCH! Found lesson at {time} in Row {row_idx}.", flush=True)
-                
-                # 5. GET CAPACITY
+            # 6. GET CAPACITY
+            # Look for the capacity info inside <div class="lekce-telo-obsazenost">
+            capacity_div = lesson.find('div', class_='lekce-telo-obsazenost')
+            
+            if not capacity_div:
+                print("DEBUG: Capacity div not found. Checking if lesson has no capacity display...", flush=True)
+                # Some lessons might not show capacity if they have no limits
+                # Check the full text for patterns
                 full_text = lesson.get_text(strip=True)
                 print(f"DEBUG: Raw Lesson Text: '{full_text}'", flush=True)
                 
-                # Regex search for "Number / Number"
+                # Try to find capacity pattern in full text
                 match = re.search(r'(\d+)\s*/\s*(\d+)', full_text)
                 
                 if match:
                     occupied = int(match.group(1))
                     total = int(match.group(2))
-                    
                     is_free = occupied < total
                     print(f"DEBUG: Status -> Occupied: {occupied}, Total: {total}. Free spot? {is_free}", flush=True)
                     return is_free, f"{occupied} / {total}"
                 else:
-                    print("DEBUG: Lesson found, but could not parse capacity numbers.", flush=True)
-                    return False, "Parse Error"
-
-    print(f"DEBUG: Finished scanning. Lesson at {time} not found in this column.", flush=True)
+                    print("DEBUG: No capacity info found. Assuming spots available.", flush=True)
+                    return True, "Unknown capacity"
+            
+            # Get the capacity text
+            capacity_text = capacity_div.get_text(strip=True)
+            print(f"DEBUG: Capacity text: '{capacity_text}'", flush=True)
+            
+            # Extract numbers using regex
+            match = re.search(r'(\d+)\s*/\s*(\d+)', capacity_text)
+            
+            if match:
+                occupied = int(match.group(1))
+                total = int(match.group(2))
+                is_free = occupied < total
+                print(f"DEBUG: Status -> Occupied: {occupied}, Total: {total}. Free spot? {is_free}", flush=True)
+                return is_free, f"{occupied} / {total}"
+            else:
+                print("DEBUG: Regex failed to parse capacity.", flush=True)
+                return False, "Parse Error"
+    
+    print(f"DEBUG: Lesson at {time} not found in this column.", flush=True)
     return False, None
 
 
@@ -180,7 +233,8 @@ def main():
                 print(f"Status: Full or Not Found (Capacity: {capacity_text})", flush=True)
                 
         except Exception as e:
-            print(f"Error processing row {index}: {e}", flush=True)
+            print(f"Error processing row {index}:", flush=True)
+            traceback.print_exc()
             continue
     
     print("Processing complete.", flush=True)
