@@ -125,18 +125,32 @@ def check_spot_availability(soup, date, time):
     Check if a spot is available for the given date and time.
     Returns (is_available, capacity_text) where is_available is True if spot is free.
     """
-    # Step 1: Find the date column
-    date_column = find_date_column(soup, date)
-    if not date_column:
+    # Step 1: Find the date column (day column)
+    day_column = find_date_column(soup, date)
+    if not day_column:
         print(f"DEBUG: Could not find day column for date: {date}", flush=True)
         return False, None
     
     print("DEBUG: Found day column.", flush=True)
     
-    # Step 2: Find the time block within that column
-    time_block = find_time_block_in_column(date_column, time)
+    # Step 2: Strict "Starts With" Matching for time block
+    # Iterate through elements in the day_column
+    all_elements = day_column.find_all(['div', 'span', 'p', 'td', 'li'])
+    time_block = None
+    
+    for elem in all_elements:
+        # Extract text and strip() whitespace
+        text = elem.get_text(strip=True)
+        # Check if the text starts with the target time (e.g., "15:00")
+        # This ensures "15:00 - 16:00" is matched, but "14:00 - 15:00" is NOT
+        if text.startswith(time):
+            time_block = elem
+            break
+    
+    # Debug HTML Dump (Safety Net): If time block not found, dump day column HTML
     if not time_block:
-        print(f"DEBUG: Could not find time block for time: {time}", flush=True)
+        print(f"DEBUG: FAILED to find block starting with '{time}'. Dumping Day Column HTML:", flush=True)
+        print(day_column.prettify(), flush=True)
         return False, None
     
     print("DEBUG: Found time block.", flush=True)
@@ -154,7 +168,7 @@ def check_spot_availability(soup, date, time):
     text = capacity_element.get_text(strip=True)
     print(f"DEBUG: Raw capacity text: \"{text}\"", flush=True)
     
-    # Regex Parsing - Use robust regex to find numbers
+    # Regex Parsing - Use robust regex to find numbers (keeps existing logic)
     match = re.search(r'(\d+)\s*/\s*(\d+)', text)
     if not match:
         print("DEBUG: No pattern match found in text", flush=True)
