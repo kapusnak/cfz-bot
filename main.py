@@ -32,48 +32,47 @@ def fetch_calendar_html():
 def check_spot_availability(soup, date, time):
     """
     Check availability by finding the specific lesson link in the correct date column.
-    Structure based on Pastebin HTML:
-    Table -> tr -> td -> a.lekce-link -> span.cas-od (Time) & div.lekce-telo-obsazeno (Capacity)
+    Robust version: Does not rely on <thead> or <tbody> tags being present.
     """
     
     # 1. FIND THE MAIN TABLE
     table = soup.find('table')
     if not table:
-        print("DEBUG: No table found.", flush=True)
+        print("DEBUG: No table found on the page.", flush=True)
         return False, None
 
     # 2. FIND THE COLUMN INDEX FOR THE DATE
-    # The header is inside <thead> -> <tr> -> <th>
-    header_row = table.find('thead').find('tr')
-    headers = header_row.find_all('th')
+    # FIX: Don't look for 'thead'. Just find the first row ('tr') in the table.
+    rows = table.find_all('tr')
+    if not rows:
+        print("DEBUG: Table found, but it has no rows.", flush=True)
+        return False, None
+
+    header_row = rows[0] # Assume first row is header
+    headers = header_row.find_all(['th', 'td']) # Sometimes headers use td instead of th
     
     col_index = None
-    # Skip the first header usually (it's often empty or times), check all
+    simple_date = ".".join(date.split('.')[:2]) # "29.12.2025" -> "29.12"
+    
     for i, th in enumerate(headers):
         th_text = th.get_text(strip=True)
-        # Check if "29.12" matches "Pondělí 29.12."
-        # We strip the year from CSV date "29.12.2025" -> "29.12" for safer matching
-        simple_date = ".".join(date.split('.')[:2]) 
-        
         if simple_date in th_text:
             col_index = i
-            print(f"DEBUG: Found column for date '{simple_date}' at Index {i}. Header text: '{th_text}'", flush=True)
+            print(f"DEBUG: Found column for date '{simple_date}' at Index {i}. Header: '{th_text}'", flush=True)
             break
             
     if col_index is None:
-        print(f"DEBUG: Date '{date}' not found in table headers.", flush=True)
-        # Debug: Print all headers to see what went wrong
-        all_headers = [th.get_text(strip=True) for th in headers]
-        print(f"DEBUG: Available headers: {all_headers}", flush=True)
+        print(f"DEBUG: Date '{date}' (searched as '{simple_date}') not found in header.", flush=True)
+        # Debug: Print headers to help diagnose
+        debug_headers = [h.get_text(strip=True) for h in headers]
+        print(f"DEBUG: Visible headers: {debug_headers}", flush=True)
         return False, None
 
-    # 3. SCAN ALL ROWS FOR THE LESSON
-    # We iterate through all 'tr' in 'tbody'
-    tbody = table.find('tbody')
-    rows = tbody.find_all('tr')
-    print(f"DEBUG: Scanning {len(rows)} rows in the schedule...", flush=True)
+    # 3. SCAN ALL REMAINING ROWS FOR THE LESSON
+    print(f"DEBUG: Scanning {len(rows)-1} rows for lessons...", flush=True)
 
-    for row_idx, row in enumerate(rows):
+    # Start from index 1 (skip the header row)
+    for row_idx, row in enumerate(rows[1:], start=1):
         cells = row.find_all('td')
         
         # Safety: Ensure row has enough cells
@@ -99,8 +98,6 @@ def check_spot_availability(soup, date, time):
                 print(f"DEBUG: MATCH! Found lesson at {time} in Row {row_idx}.", flush=True)
                 
                 # 5. GET CAPACITY
-                # Extract all text from the lesson link to find numbers
-                # The HTML usually has "17 / 18" inside div.lekce-telo-obsazeno or similar
                 full_text = lesson.get_text(strip=True)
                 print(f"DEBUG: Raw Lesson Text: '{full_text}'", flush=True)
                 
