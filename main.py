@@ -34,17 +34,17 @@ def parse_capacity(capacity_text):
     Parse capacity text like "18 / 18" or "2 / 18" into (occupied, total).
     Returns (None, None) if parsing fails.
     """
-    print(f"DEBUG parse_capacity: Input text = '{capacity_text}' (Type: {type(capacity_text)})")
+    print(f"DEBUG parse_capacity: Input text = '{capacity_text}' (Type: {type(capacity_text)})", flush=True)
     match = re.search(r'(\d+)\s*/\s*(\d+)', capacity_text)
     if match:
         occupied_str = match.group(1)
         total_str = match.group(2)
-        print(f"DEBUG parse_capacity: Regex matched - occupied_str='{occupied_str}', total_str='{total_str}'")
+        print(f"DEBUG parse_capacity: Regex matched - occupied_str='{occupied_str}', total_str='{total_str}'", flush=True)
         occupied = int(occupied_str)
         total = int(total_str)
-        print(f"DEBUG parse_capacity: Converted - occupied={occupied} (Type: {type(occupied)}), total={total} (Type: {type(total)})")
+        print(f"DEBUG parse_capacity: Converted - occupied={occupied} (Type: {type(occupied)}), total={total} (Type: {type(total)})", flush=True)
         return occupied, total
-    print(f"DEBUG parse_capacity: No regex match found in '{capacity_text}'")
+    print(f"DEBUG parse_capacity: No regex match found in '{capacity_text}'", flush=True)
     return None, None
 
 
@@ -128,36 +128,46 @@ def check_spot_availability(soup, date, time):
     # Step 1: Find the date column
     date_column = find_date_column(soup, date)
     if not date_column:
+        print(f"DEBUG: Could not find day column for date: {date}", flush=True)
         return False, None
+    
+    print("DEBUG: Found day column.", flush=True)
     
     # Step 2: Find the time block within that column
     time_block = find_time_block_in_column(date_column, time)
     if not time_block:
+        print(f"DEBUG: Could not find time block for time: {time}", flush=True)
         return False, None
     
-    # Step 1: Locate Element - Find div.lekce-telo-obsazeno inside the time block
+    print("DEBUG: Found time block.", flush=True)
+    
+    # CRITICAL: Print the HTML content of the found time block
+    print("DEBUG: Block HTML: \n" + time_block.prettify(), flush=True)
+    
+    # Step-by-Step Parsing: Try to find div.lekce-telo-obsazeno
     capacity_element = time_block.find('div', class_='lekce-telo-obsazeno')
     if not capacity_element:
+        print("DEBUG: CAPACITY CLASS NOT FOUND inside time block!", flush=True)
         return False, None
     
-    # Step 2: Extract & Clean - Get the text with strip=True
+    # Extract & Clean - Get the text with strip=True
     text = capacity_element.get_text(strip=True)
-    print(f"DEBUG: Found capacity element text: '[{text}]'")
+    print(f"DEBUG: Raw capacity text: \"{text}\"", flush=True)
     
-    # Step 3: Regex Parsing (Critical) - Use regex to find numbers
+    # Regex Parsing - Use robust regex to find numbers
     match = re.search(r'(\d+)\s*/\s*(\d+)', text)
     if not match:
-        print("DEBUG: No pattern match found in text")
+        print("DEBUG: No pattern match found in text", flush=True)
         return False, text
     
     # Extract the captured groups and convert to int
     occupied = int(match.group(1))
     total = int(match.group(2))
-    print(f"DEBUG: Parsed numbers -> Occupied: {occupied}, Total: {total}")
+    print(f"DEBUG: Parsed numbers -> Occupied: {occupied}, Total: {total}", flush=True)
     
-    # Step 5: Comparison - Check if occupied < total
+    # Logic: Only send webhook if we successfully parsed numbers AND occupied < total
     is_available = occupied < total
-    print(f"DEBUG: Logic check -> {occupied} < {total} is {is_available}")
+    print(f"DEBUG: Logic check -> {occupied} < {total} is {is_available}", flush=True)
     
     return is_available, text
 
@@ -172,13 +182,13 @@ def send_notification(date, time, chat_id):
     
     response = requests.post(WEBHOOK_URL, json=payload)
     response.raise_for_status()
-    print(f"Found free spot! Notification sent for {date} at {time}")
+    print(f"Found free spot! Notification sent for {date} at {time}", flush=True)
 
 
 def main():
     """Main function to process CSV and check availability."""
     # Read CSV from URL
-    print(f"Fetching CSV from {SHEETS_CSV_URL}")
+    print(f"Fetching CSV from {SHEETS_CSV_URL}", flush=True)
     df = pd.read_csv(SHEETS_CSV_URL)
     
     # Validate required columns
@@ -188,7 +198,7 @@ def main():
             raise ValueError(f"CSV is missing required column: {col}")
     
     # Fetch calendar HTML once
-    print(f"Fetching calendar from {CALENDAR_URL}")
+    print(f"Fetching calendar from {CALENDAR_URL}", flush=True)
     html = fetch_calendar_html()
     soup = BeautifulSoup(html, 'html.parser')
     
@@ -204,24 +214,24 @@ def main():
             if status.lower() != 'active':
                 continue
             
-            print(f"Checking availability for {date} at {time} (ChatID: {chat_id})")
+            print(f"Checking availability for {date} at {time} (ChatID: {chat_id})", flush=True)
             
             # Check if spot is available
             is_available, capacity_text = check_spot_availability(soup, date, time)
             
             if is_available:
-                print("Found free spot!")
-                print(f"Free spot found! Capacity: {capacity_text}")
+                print("Found free spot!", flush=True)
+                print(f"Free spot found! Capacity: {capacity_text}", flush=True)
                 send_notification(date, time, chat_id)
             else:
-                print(f"No free spot available. Capacity: {capacity_text}")
+                print(f"No free spot available. Capacity: {capacity_text}", flush=True)
                 
         except Exception as e:
-            print(f"Error processing row {index}: {e}")
+            print(f"Error processing row {index}: {e}", flush=True)
             # Continue with next row
             continue
     
-    print("Processing complete.")
+    print("Processing complete.", flush=True)
 
 
 if __name__ == "__main__":
