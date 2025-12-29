@@ -34,11 +34,17 @@ def parse_capacity(capacity_text):
     Parse capacity text like "18 / 18" or "2 / 18" into (occupied, total).
     Returns (None, None) if parsing fails.
     """
+    print(f"DEBUG parse_capacity: Input text = '{capacity_text}' (Type: {type(capacity_text)})")
     match = re.search(r'(\d+)\s*/\s*(\d+)', capacity_text)
     if match:
-        occupied = int(match.group(1))
-        total = int(match.group(2))
+        occupied_str = match.group(1)
+        total_str = match.group(2)
+        print(f"DEBUG parse_capacity: Regex matched - occupied_str='{occupied_str}', total_str='{total_str}'")
+        occupied = int(occupied_str)
+        total = int(total_str)
+        print(f"DEBUG parse_capacity: Converted - occupied={occupied} (Type: {type(occupied)}), total={total} (Type: {type(total)})")
         return occupied, total
+    print(f"DEBUG parse_capacity: No regex match found in '{capacity_text}'")
     return None, None
 
 
@@ -137,8 +143,8 @@ def check_spot_availability(soup, date, time):
     # Step 4: Get the text from this element (should look like "17 / 18" or "17/18")
     capacity_text = capacity_element.get_text(strip=True)
     
-    # Step 6: Print the raw text found for debugging
-    print(f"Raw capacity text from lekce-telo-obsazeno: '{capacity_text}'")
+    # DEBUG: Print the raw text found for debugging
+    print(f"DEBUG RAW TEXT: [{capacity_text}]")
     
     # Step 5: Parse the numbers (Occupied / Total)
     occupied, total = parse_capacity(capacity_text)
@@ -146,8 +152,15 @@ def check_spot_availability(soup, date, time):
         print(f"Failed to parse capacity from text: '{capacity_text}'")
         return False, capacity_text
     
+    # DEBUG: Print the type and value of variables after parsing
+    print(f"DEBUG Occupied: {occupied} (Type: {type(occupied)})")
+    print(f"DEBUG Total: {total} (Type: {type(total)})")
+    
     # Step 7: Compare: If occupied < total, spot is free
-    is_available = occupied < total
+    comparison_result = occupied < total
+    print(f"DEBUG Check: Is {occupied} < {total}? Result: {comparison_result}")
+    
+    is_available = comparison_result
     return is_available, capacity_text
 
 
