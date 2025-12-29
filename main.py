@@ -50,49 +50,75 @@ def parse_capacity(capacity_text):
 
 def find_date_column(soup, target_date):
     """
-    Find the column that contains the target date.
+    Find the column that contains the target date using "Header Index -> Body Cell" strategy.
     The date format in CSV is "29.12.2025", and website might have "Pondělí 29.12.2025".
-    Handles both div-based and table-based calendar structures.
     """
-    # First, try to find in table headers/cells (common calendar structure)
-    for th in soup.find_all(['th', 'td']):
+    # Step 1: Find the Table - Locate the main calendar table
+    table = soup.find('table')
+    if not table:
+        # Fallback: Look for divs that contain the date (non-table structure)
+        print(f"DEBUG: No table found, trying div fallback for date: {target_date}", flush=True)
+        all_divs = soup.find_all('div')
+        for div in all_divs:
+            div_text = div.get_text(strip=True)
+            if target_date in div_text:
+                parent = div.find_parent()
+                if parent:
+                    return parent
+                return div
+        return None
+    
+    # Step 2: Find Column Index - Find the header (th) that contains the target date
+    thead = table.find('thead')
+    header_row = None
+    
+    if thead:
+        header_row = thead.find('tr')
+    else:
+        # If no thead, look for first tr with th elements
+        for tr in table.find_all('tr'):
+            if tr.find('th'):
+                header_row = tr
+                break
+    
+    if not header_row:
+        print(f"DEBUG: No header row found in table", flush=True)
+        return None
+    
+    # Get all header cells (th) in the header row
+    header_cells = header_row.find_all('th')
+    
+    # Find the header that contains the target date and get its index
+    header_index = None
+    for index, th in enumerate(header_cells):
         th_text = th.get_text(strip=True)
         if target_date in th_text:
-            # Find the column - if it's a th, find the corresponding column
-            # If it's a td, find its parent row and then the column
-            parent_row = th.find_parent('tr')
-            if parent_row:
-                # Get all cells in the row to find the column index
-                cells = parent_row.find_all(['th', 'td'])
-                try:
-                    col_index = cells.index(th)
-                    # Find all rows and get the same column index
-                    table = parent_row.find_parent(['table', 'tbody', 'thead'])
-                    if table:
-                        all_rows = table.find_all('tr')
-                        # Return the first data row (skip header if needed)
-                        for row in all_rows:
-                            row_cells = row.find_all(['th', 'td'])
-                            if col_index < len(row_cells):
-                                return row_cells[col_index]
-                except ValueError:
-                    pass
-            return th
+            header_index = index
+            print(f"DEBUG: Found date in header index {index}. Switching to body column.", flush=True)
+            break
     
-    # Fallback: Look for divs that contain the date
-    all_divs = soup.find_all('div')
+    if header_index is None:
+        print(f"DEBUG: Could not find date '{target_date}' in any header cell", flush=True)
+        return None
     
-    for div in all_divs:
-        div_text = div.get_text(strip=True)
-        # Check if the div text contains the target date
-        if target_date in div_text:
-            # Try to find the parent column or the column itself
-            # Look for common calendar structures
-            parent = div.find_parent()
-            if parent:
-                return parent
-            return div
+    # Step 3: Find Body Column - Find the corresponding td at the same index
+    tbody = table.find('tbody')
+    body_rows = []
     
+    if tbody:
+        body_rows = tbody.find_all('tr')
+    else:
+        # If no tbody, get all tr elements except the header row
+        all_rows = table.find_all('tr')
+        body_rows = [row for row in all_rows if row != header_row]
+    
+    # Return the first body row's td at the matching index
+    for row in body_rows:
+        row_cells = row.find_all('td')
+        if header_index < len(row_cells):
+            return row_cells[header_index]
+    
+    print(f"DEBUG: Could not find corresponding td at index {header_index} in body rows", flush=True)
     return None
 
 
