@@ -2,8 +2,8 @@ name: Monitor CrossFit Availability
 
 on:
   schedule:
-    # Run every 10 minutes
-    - cron: '*/10 * * * *'
+    # Run every 3 minutes
+    - cron: '*/3 * * * *'
   workflow_dispatch:
 
 jobs:
