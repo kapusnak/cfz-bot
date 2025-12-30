@@ -49,10 +49,10 @@ def check_spot_availability(soup, date, time):
                 print(f"DEBUG: Looking for wrapper class: {wrapper_class}", flush=True)
             else:
                 print(f"DEBUG: Invalid date format: {date}", flush=True)
-                return False, None
+                return False, "Invalid Date Format"
         except Exception as e:
             print(f"DEBUG: Error formatting date: {e}", flush=True)
-            return False, None
+            return False, "Date Format Error"
         
         # Find the wrapper div for the specific date
         wrapper_div = soup.find('div', class_=wrapper_class)
@@ -65,7 +65,7 @@ def check_spot_availability(soup, date, time):
                 print(f"DEBUG: Found {len(all_wrappers)} wrapper divs in total", flush=True)
                 sample_classes = [w.get('class') for w in all_wrappers[:3]]
                 print(f"DEBUG: Sample wrapper classes: {sample_classes}", flush=True)
-            return False, None
+            return False, "Date Wrapper Not Found"
         
         print(f"DEBUG: Found wrapper div for date {date}", flush=True)
         
@@ -75,7 +75,7 @@ def check_spot_availability(soup, date, time):
         
         if len(lessons) == 0:
             print("DEBUG: No lessons found in wrapper", flush=True)
-            return False, None
+            return False, "No Lessons in Wrapper"
         
         # Search for the lesson with matching time
         for idx, lesson in enumerate(lessons):
@@ -145,35 +145,33 @@ def check_spot_availability(soup, date, time):
                     return False, "Parse Error"
         
         print(f"DEBUG: Lesson at {time} not found in wrapper for {date}", flush=True)
-        return False, None
+        return False, "Lesson Not Found"
         
     except Exception as e:
         print(f"DEBUG: Exception in check_spot_availability: {e}", flush=True)
         traceback.print_exc()
-        return False, None
+        return False, "Exception Error"
 
 
-def send_notification(date, time, chat_id):
+def send_notification(date, time, chat_id, message, status_update):
     """
     Send a POST request to the webhook with notification data.
-    
-    Sends both a formatted message (value1) for Telegram AND separate fields
-    (date, time, chat_id) for easy Google Sheets searching in Make.com.
+    Now accepts a custom message and status_update string.
     """
-    message = f"MÍSTO JE VOLNÉ! {date} v {time}"
     
     # Payload with separate fields for Make.com logic
     payload = {
-        "value1": message,      # For Telegram notification
+        "value1": message,      # Dynamic message (Free or Full)
         "date": date,           # Separate field for Google Sheets search
         "time": time,           # Separate field for Google Sheets search
-        "chat_id": str(chat_id) # Separate field for Google Sheets search
+        "chat_id": str(chat_id),# Separate field for Google Sheets search
+        "status_update": status_update # 'done' or 'waiting'
     }
     
     try:
         response = requests.post(WEBHOOK_URL, json=payload)
         response.raise_for_status()
-        print(f"✓ Found free spot! Notification sent for {date} at {time} (ChatID: {chat_id})", flush=True)
+        print(f"✓ Webhook sent! Status: {status_update} | Date: {date} {time}", flush=True)
     except Exception as e:
         print(f"✗ Error sending webhook: {e}", flush=True)
 
@@ -181,13 +179,6 @@ def send_notification(date, time, chat_id):
 def is_in_past(date_str, time_str):
     """
     Check if the given date and time are in the past.
-    
-    Args:
-        date_str: Date in format "DD.MM.YYYY"
-        time_str: Time in format "HH:MM"
-    
-    Returns:
-        True if the datetime is in the past, False otherwise
     """
     try:
         # Parse date and time
@@ -262,29 +253,46 @@ def main():
         try:
             date = str(row['Date']).strip()
             time = str(row['Time']).strip()
-            status = str(row['Status']).strip()
+            status = str(row['Status']).strip().lower() # Normalizujeme na malá písmena
             chat_id = row['ChatID']
             
-            # Skip inactive rows
-            if status.lower() != 'active':
+            # 1. Skip rows that are done or inactive (BUT ALLOW 'waiting')
+            if status not in ['active', 'waiting']:
                 continue
             
             active_count += 1
             
-            # Skip past lessons
+            # 2. Skip past lessons
             if is_in_past(date, time):
                 skipped_past += 1
                 continue
             
-            print(f"\n--- Checking: {date} at {time} (ChatID: {chat_id}) ---", flush=True)
+            print(f"\n--- Checking: {date} at {time} (ChatID: {chat_id}) [Status: {status}] ---", flush=True)
             
             is_available, capacity_text = check_spot_availability(soup, date, time)
             
+            # --- LOGIKA ROZHODOVÁNÍ ---
+            
+            # SCÉNÁŘ 1: MÍSTO JE VOLNÉ (Ať už jsme Active nebo Waiting)
             if is_available:
                 found_spots += 1
-                send_notification(date, time, chat_id)
-            else:
-                print(f"Status: Full or Not Found (Capacity: {capacity_text})", flush=True)
+                msg = f"🟢 MÍSTO JE VOLNÉ! {date} v {time}\nObsazenost: {capacity_text}\nBěž si to rezervovat!"
+                send_notification(date, time, chat_id, msg, "done")
+            
+            # SCÉNÁŘ 2: JE PLNO, ALE JE TO PRVNÍ KONTROLA (Status: Active)
+            # Musíme dát vědět, že začínáme hlídat.
+            elif not is_available and status == 'active':
+                # Ověříme, zda jsme opravdu našli kapacitu a není to chyba
+                if capacity_text and "/" in str(capacity_text):
+                    msg = f"🟡 Lekce je plná ({capacity_text}).\nPřepínám na hlídání. Ozvu se, až se někdo odhlásí."
+                    send_notification(date, time, chat_id, msg, "waiting")
+                else:
+                    print(f"DEBUG: Scrape failed ({capacity_text}), not updating status.", flush=True)
+
+            # SCÉNÁŘ 3: JE PLNO A UŽ HLÍDÁME (Status: Waiting)
+            # Neděláme nic, abychom nespamovali.
+            elif not is_available and status == 'waiting':
+                print(f"Status: Still full ({capacity_text}). Keeping silent.", flush=True)
                 
         except Exception as e:
             print(f"✗ Error processing row {index}:", flush=True)
@@ -293,7 +301,7 @@ def main():
     
     print("\n" + "=" * 60, flush=True)
     print("Processing complete!", flush=True)
-    print(f"  Active rows checked: {active_count}", flush=True)
+    print(f"  Rows processed: {active_count}", flush=True)
     print(f"  Past lessons skipped: {skipped_past}", flush=True)
     print(f"  Free spots found: {found_spots}", flush=True)
     print("=" * 60, flush=True)
