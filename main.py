@@ -6,306 +6,174 @@ import traceback
 from bs4 import BeautifulSoup
 from datetime import datetime
 
-# Environment variables
+# --- NASTAVENÍ ---
 SHEETS_CSV_URL = os.getenv('SHEETS_CSV_URL')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
-
-if not SHEETS_CSV_URL:
-    raise ValueError("SHEETS_CSV_URL environment variable is not set")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL environment variable is not set")
-
-# URL to scrape
 CALENDAR_URL = "https://crossfitzlin.inrs.cz/rs/kalendar_vypis"
 
-# Headers for web scraping
+# False = Ostrý provoz (hlásí realitu)
+# True = Simulace (pro testování 'waiting' stavu)
+SIMULATE_FULL_LESSON = False
+
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
+if not SHEETS_CSV_URL or not WEBHOOK_URL:
+    raise ValueError("Chybí environment variables (SHEETS_CSV_URL nebo WEBHOOK_URL)")
 
 def fetch_calendar_html():
-    """Fetch the calendar HTML from the website."""
     response = requests.get(CALENDAR_URL, headers=HEADERS)
     response.raise_for_status()
     return response.text
 
-
 def check_spot_availability(soup, date, time):
     """
-    Check availability in the CrossFit calendar.
-    Uses lesson wrapper divs to identify the correct date column.
+    Hledá lekci a kontroluje kapacitu.
+    Vrací: (Je_Volno, Text_Kapacity)
     """
-    
     try:
-        print(f"DEBUG: Checking availability for {date} at {time}", flush=True)
-        
-        # Convert date from "DD.MM.YYYY" to "YYYY-MM-DD" format for wrapper matching
+        # 1. Najdi wrapper pro konkrétní den
         try:
             date_parts = date.split('.')
-            if len(date_parts) == 3:
-                formatted_date = f"{date_parts[2]}-{date_parts[1]}-{date_parts[0]}"
-                wrapper_class = f"lekce-wrapper-{formatted_date}"
-                print(f"DEBUG: Looking for wrapper class: {wrapper_class}", flush=True)
-            else:
-                print(f"DEBUG: Invalid date format: {date}", flush=True)
-                return False, "Invalid Date Format"
-        except Exception as e:
-            print(f"DEBUG: Error formatting date: {e}", flush=True)
-            return False, "Date Format Error"
+            formatted_date = f"{date_parts[2]}-{date_parts[1]}-{date_parts[0]}"
+            wrapper_class = f"lekce-wrapper-{formatted_date}"
+        except:
+            return False, "Chybný formát data"
         
-        # Find the wrapper div for the specific date
         wrapper_div = soup.find('div', class_=wrapper_class)
+        if not wrapper_div: 
+            return False, "Lekce pro tento den nenalezeny"
         
-        if not wrapper_div:
-            print(f"DEBUG: Wrapper div with class '{wrapper_class}' not found", flush=True)
-            # Try to find any wrapper to see what's available
-            all_wrappers = soup.find_all('div', class_=lambda x: x and 'lekce-wrapper-' in str(x))
-            if all_wrappers:
-                print(f"DEBUG: Found {len(all_wrappers)} wrapper divs in total", flush=True)
-                sample_classes = [w.get('class') for w in all_wrappers[:3]]
-                print(f"DEBUG: Sample wrapper classes: {sample_classes}", flush=True)
-            return False, "Date Wrapper Not Found"
-        
-        print(f"DEBUG: Found wrapper div for date {date}", flush=True)
-        
-        # Find all lessons within this date's wrapper
+        # 2. Najdi lekci v konkrétním čase
         lessons = wrapper_div.find_all('div', class_='jedna-lekce-vypis')
-        print(f"DEBUG: Found {len(lessons)} lessons in this date's wrapper", flush=True)
+        target_lesson = None
         
-        if len(lessons) == 0:
-            print("DEBUG: No lessons found in wrapper", flush=True)
-            return False, "No Lessons in Wrapper"
-        
-        # Search for the lesson with matching time
-        for idx, lesson in enumerate(lessons):
-            # Find the time span
+        for lesson in lessons:
             time_span = lesson.find('span', class_='cas-od')
-            
-            if not time_span:
-                continue
-            
-            found_time = time_span.get_text(strip=True)
-            
-            # Compare with target time
-            if found_time == time:
-                print(f"DEBUG: MATCH! Found lesson at {time} (lesson index {idx})", flush=True)
-                
-                # Get lesson activity name for additional context
-                activity_link = lesson.find('a', class_='lekce-telo-aktivita')
-                activity_name = activity_link.get_text(strip=True) if activity_link else "Unknown"
-                print(f"DEBUG: Activity: {activity_name}", flush=True)
-                
-                # Check capacity
-                # Look for <span class="cisla"> which contains the capacity
-                capacity_span = lesson.find('span', class_='cisla')
-                
-                if not capacity_span:
-                    print("DEBUG: 'cisla' span not found. Checking for capacity in full text...", flush=True)
-                    # Check the full text for patterns
-                    full_text = lesson.get_text(strip=True)
-                    
-                    # Try to find capacity pattern in full text
-                    match = re.search(r'(\d+)\s*/\s*(\d+)', full_text)
-                    
-                    if match:
-                        occupied = int(match.group(1))
-                        total = int(match.group(2))
-                        is_free = occupied < total
-                        print(f"DEBUG: Status -> Occupied: {occupied}, Total: {total}. Free spot? {is_free}", flush=True)
-                        return is_free, f"{occupied} / {total}"
-                    else:
-                        print("DEBUG: No capacity info found. Assuming spots available.", flush=True)
-                        return True, "Unknown capacity"
-                
-                # Get the capacity text from the span
-                capacity_text = capacity_span.get_text(strip=True)
-                print(f"DEBUG: Capacity span text: '{capacity_text}'", flush=True)
-                
-                # Extract numbers using regex
-                match = re.search(r'(\d+)\s*/\s*(\d+)', capacity_text)
-                
-                if match:
-                    occupied = int(match.group(1))
-                    total = int(match.group(2))
-                    is_free = occupied < total
-                    print(f"DEBUG: Status -> Occupied: {occupied}, Total: {total}. Free spot? {is_free}", flush=True)
-                    return is_free, f"{occupied} / {total}"
-                else:
-                    print("DEBUG: Regex failed to parse capacity from 'cisla' span.", flush=True)
-                    # Try full text as fallback
-                    full_text = lesson.get_text(strip=True)
-                    match = re.search(r'(\d+)\s*/\s*(\d+)', full_text)
-                    if match:
-                        occupied = int(match.group(1))
-                        total = int(match.group(2))
-                        is_free = occupied < total
-                        print(f"DEBUG: Found in full text -> Occupied: {occupied}, Total: {total}. Free spot? {is_free}", flush=True)
-                        return is_free, f"{occupied} / {total}"
-                    return False, "Parse Error"
+            if time_span and time_span.get_text(strip=True) == time:
+                target_lesson = lesson
+                break
         
-        print(f"DEBUG: Lesson at {time} not found in wrapper for {date}", flush=True)
-        return False, "Lesson Not Found"
-        
-    except Exception as e:
-        print(f"DEBUG: Exception in check_spot_availability: {e}", flush=True)
-        traceback.print_exc()
-        return False, "Exception Error"
+        if not target_lesson: 
+            return False, "Lekce v tento čas neexistuje"
 
+        # 3. PŘÍSNÁ KONTROLA KAPACITY
+        # Hledáme text, ale bereme v potaz JEN čísla, kde je celková kapacita 18.
+        
+        # Nejdřív zkusíme span 'cisla'
+        capacity_span = target_lesson.find('span', class_='cisla')
+        full_text = target_lesson.get_text(" ", strip=True)
+        text_to_search = capacity_span.get_text(strip=True) if capacity_span else full_text
+        
+        # Najdeme všechny dvojice čísel (X / Y)
+        matches = re.findall(r'(\d+)\s*/\s*(\d+)', text_to_search)
+        
+        for occupied_str, total_str in matches:
+            occ = int(occupied_str)
+            tot = int(total_str)
+            
+            # === ZDE JE TA POJISTKA ===
+            if tot == 18:
+                print(f"DEBUG: Nalezena validní kapacita: {occ}/{tot}", flush=True)
+                
+                if SIMULATE_FULL_LESSON:
+                    return False, "18/18 (Simulace)"
+                
+                return occ < tot, f"{occ}/{tot}"
+            else:
+                # Našli jsme třeba datum 19/1 nebo rok 2026/01 -> Ignorujeme
+                print(f"DEBUG: Ignoruji číslo {occ}/{tot} (není to kapacita 18)", flush=True)
+        
+        return False, "Kapacita nenalezena"
+
+    except Exception as e:
+        print(f"Error checking availability: {e}", flush=True)
+        traceback.print_exc()
+        return False, "Error"
 
 def send_notification(date, time, chat_id, message, status_update):
-    """
-    Send a POST request to the webhook with notification data.
-    Now accepts a custom message and status_update string.
-    """
-    
-    # Payload with separate fields for Make.com logic
     payload = {
-        "value1": message,      # Dynamic message (Free or Full)
-        "date": date,           # Separate field for Google Sheets search
-        "time": time,           # Separate field for Google Sheets search
-        "chat_id": str(chat_id),# Separate field for Google Sheets search
-        "status_update": status_update # 'done' or 'waiting'
+        "value1": message,
+        "date": date,
+        "time": time,
+        "chat_id": str(chat_id),
+        "status_update": status_update
     }
-    
     try:
-        response = requests.post(WEBHOOK_URL, json=payload)
-        response.raise_for_status()
+        requests.post(WEBHOOK_URL, json=payload)
         print(f"✓ Webhook sent! Status: {status_update} | Date: {date} {time}", flush=True)
     except Exception as e:
         print(f"✗ Error sending webhook: {e}", flush=True)
 
-
 def is_in_past(date_str, time_str):
-    """
-    Check if the given date and time are in the past.
-    """
     try:
-        # Parse date and time
         date_parts = date_str.split('.')
         time_parts = time_str.split(':')
-        
-        if len(date_parts) != 3 or len(time_parts) != 2:
-            print(f"DEBUG: Invalid date/time format: {date_str} {time_str}", flush=True)
-            return False
-        
-        # Create datetime object
         lesson_datetime = datetime(
-            year=int(date_parts[2]),
-            month=int(date_parts[1]),
-            day=int(date_parts[0]),
-            hour=int(time_parts[0]),
-            minute=int(time_parts[1])
+            year=int(date_parts[2]), month=int(date_parts[1]), day=int(date_parts[0]),
+            hour=int(time_parts[0]), minute=int(time_parts[1])
         )
-        
-        # Compare with current time
-        now = datetime.now()
-        is_past = lesson_datetime < now
-        
-        if is_past:
-            print(f"DEBUG: Skipping past lesson: {date_str} at {time_str}", flush=True)
-        
-        return is_past
-        
-    except Exception as e:
-        print(f"DEBUG: Error checking if date is in past: {e}", flush=True)
-        # If we can't parse the date, don't skip it (safer to check than to miss)
+        if lesson_datetime < datetime.now():
+            print(f"DEBUG: Skipping past lesson: {date_str} {time_str}", flush=True)
+            return True
+        return False
+    except:
         return False
 
-
 def main():
-    """Main function to process CSV and check availability."""
-    print("=" * 60, flush=True)
-    print("CrossFit Zlín Spot Checker - Starting", flush=True)
-    print("=" * 60, flush=True)
-    
-    print(f"Fetching CSV from Google Sheets...", flush=True)
+    print("==========================================", flush=True)
+    print("CrossFit Zlín Checker - START", flush=True)
+    if SIMULATE_FULL_LESSON: print("!!! SIMULATION MODE ACTIVE !!!", flush=True)
+    print("==========================================", flush=True)
+
     try:
         df = pd.read_csv(SHEETS_CSV_URL)
-        print(f"✓ CSV loaded: {len(df)} rows found", flush=True)
+        print(f"✓ CSV loaded ({len(df)} rows)", flush=True)
     except Exception as e:
-        print(f"✗ Critical Error reading CSV: {e}", flush=True)
+        print(f"✗ Error reading CSV: {e}", flush=True)
         return
-    
-    # Validate required columns
-    required_columns = ['Date', 'Time', 'Status', 'ChatID']
-    for col in required_columns:
-        if col not in df.columns:
-            print(f"✗ Error: CSV is missing required column: {col}", flush=True)
-            print(f"Available columns: {list(df.columns)}", flush=True)
-            return
-    
-    print(f"Fetching calendar from {CALENDAR_URL}...", flush=True)
+
     try:
         html = fetch_calendar_html()
         soup = BeautifulSoup(html, 'html.parser')
-        print("✓ Calendar HTML fetched and parsed", flush=True)
     except Exception as e:
-        print(f"✗ Critical Error fetching calendar: {e}", flush=True)
+        print(f"✗ Error fetching calendar: {e}", flush=True)
         return
-    
-    # Process each row
-    active_count = 0
-    skipped_past = 0
-    found_spots = 0
-    
+
     for index, row in df.iterrows():
         try:
             date = str(row['Date']).strip()
             time = str(row['Time']).strip()
-            status = str(row['Status']).strip().lower() # Normalizujeme na malá písmena
+            status = str(row['Status']).strip().lower()
             chat_id = row['ChatID']
-            
-            # 1. Skip rows that are done or inactive (BUT ALLOW 'waiting')
-            if status not in ['active', 'waiting']:
-                continue
-            
-            active_count += 1
-            
-            # 2. Skip past lessons
-            if is_in_past(date, time):
-                skipped_past += 1
-                continue
-            
-            print(f"\n--- Checking: {date} at {time} (ChatID: {chat_id}) [Status: {status}] ---", flush=True)
-            
-            is_available, capacity_text = check_spot_availability(soup, date, time)
-            
-            # --- LOGIKA ROZHODOVÁNÍ ---
-            
-            # SCÉNÁŘ 1: MÍSTO JE VOLNÉ (Ať už jsme Active nebo Waiting)
-            if is_available:
-                found_spots += 1
-                msg = f"🟢 MÍSTO JE VOLNÉ! {date} v {time}\nObsazenost: {capacity_text}\nBěž si to rezervovat!"
+
+            if status not in ['active', 'waiting']: continue
+            if not SIMULATE_FULL_LESSON and is_in_past(date, time): continue
+
+            print(f"--- Checking: {date} {time} [{status}] ---", flush=True)
+            is_free, cap_text = check_spot_availability(soup, date, time)
+
+            # 1. VOLNO
+            if is_free:
+                msg = f"🟢 MÍSTO JE VOLNÉ! {date} v {time} ({cap_text})"
                 send_notification(date, time, chat_id, msg, "done")
             
-            # SCÉNÁŘ 2: JE PLNO, ALE JE TO PRVNÍ KONTROLA (Status: Active)
-            # Musíme dát vědět, že začínáme hlídat.
-            elif not is_available and status == 'active':
-                # Ověříme, zda jsme opravdu našli kapacitu a není to chyba
-                if capacity_text and "/" in str(capacity_text):
-                    msg = f"🟡 Lekce je plná ({capacity_text}).\nPřepínám na hlídání. Ozvu se, až se někdo odhlásí."
+            # 2. PLNO -> Active (Začínáme hlídat)
+            elif not is_free and status == 'active':
+                # Posíláme info jen pokud jsme našli validní kapacitu (obsahuje /18)
+                if "/18" in cap_text:
+                    msg = f"🟡 Lekce je plná ({cap_text}). Přepínám na hlídání."
                     send_notification(date, time, chat_id, msg, "waiting")
                 else:
-                    print(f"DEBUG: Scrape failed ({capacity_text}), not updating status.", flush=True)
+                    print(f"DEBUG: Nenalezena validní kapacita ({cap_text}), neměním status.", flush=True)
 
-            # SCÉNÁŘ 3: JE PLNO A UŽ HLÍDÁME (Status: Waiting)
-            # Neděláme nic, abychom nespamovali.
-            elif not is_available and status == 'waiting':
-                print(f"Status: Still full ({capacity_text}). Keeping silent.", flush=True)
-                
+            # 3. PLNO -> Waiting (Už hlídáme)
+            elif not is_free and status == 'waiting':
+                print(f"Stále plno ({cap_text}). Mlčím.", flush=True)
+
         except Exception as e:
-            print(f"✗ Error processing row {index}:", flush=True)
-            traceback.print_exc()
-            continue
-    
-    print("\n" + "=" * 60, flush=True)
-    print("Processing complete!", flush=True)
-    print(f"  Rows processed: {active_count}", flush=True)
-    print(f"  Past lessons skipped: {skipped_past}", flush=True)
-    print(f"  Free spots found: {found_spots}", flush=True)
-    print("=" * 60, flush=True)
-
+            print(f"✗ Error row {index}: {e}", flush=True)
 
 if __name__ == "__main__":
     main()
