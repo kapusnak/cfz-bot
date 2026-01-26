@@ -156,7 +156,7 @@ def main():
 
             # 1. VOLNO
             if is_free:
-                msg = f"🟢 MÍSTO JE VOLNÉ! {date} v {time} ({cap_text}) https://crossfitzlin.inrs.cz/rs/kalendar_vypis"
+                msg = f"🟢 NA LEKCI SE UVOLNILO MÍSTO! {date} v {time} ({cap_text}) https://crossfitzlin.inrs.cz/rs/kalendar_vypis"
                 send_notification(date, time, chat_id, msg, "done")
             
             # 2. PLNO -> Active (Začínáme hlídat)
