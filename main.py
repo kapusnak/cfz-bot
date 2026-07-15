@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import pandas as pd
 import requests
 import traceback
@@ -176,4 +177,9 @@ def main():
             print(f"✗ Error row {index}: {e}", flush=True)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Fatal error: {e}", flush=True)
+        sys.exit(1)
+    sys.exit(0)
